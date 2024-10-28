@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>삼국 시대 전략 게임</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        #gameCanvas {
+            border: 1px solid black;
+            background-color: #eef;
+        }
+        #info {
+            margin-top: 20px;
+        }
+        #actions button {
+            padding: 10px 20px;
+            margin: 5px;
+        }
+        #messages {
+            margin-top: 20px;
+            height: 150px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            text-align: left;
+        }
+        /* 모달 스타일 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 100;
+            padding-top: 100px;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 300px;
+        }
+        .modal-close {
+            color: #aaa;
+            float: right;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .slider-container {
+            margin: 20px 0;
+        }
+        .slider-value {
+            font-size: 18px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>삼국 시대 전략 게임</h1>
+
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+
+    <div id="info" style="display: none;">
+        <p>현재 턴: <span id="turn">1</span></p>
+        <p>행동력: <span id="actionPoints">5</span></p>
+        <p>소유한 영토: <span id="ownedTerritories">1</span></p>
+        <p>자원 - 금: <span id="gold">100</span>, 식량: <span id="food">100</span></p>
+    </div>
+
+    <div id="actions" style="display: none;">
+        <h2>행동 메뉴</h2>
+        <button onclick="harvestResources()">수확</button>
+        <button onclick="recruitSoldiers()">징병</button>
+        <button onclick="endTurn()">턴 종료</button>
+    </div>
+
+    <div id="messages" style="display: none;"></div>
+
+    <!-- 병사 수 선택 모달 -->
+    <div id="soldierModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" id="modalClose">&times;</span>
+            <h3 id="modalTitle">병사 수 선택</h3>
+            <div class="slider-container">
+                <input type="range" min="1" max="100" value="1" id="soldierSlider">
+                <div class="slider-value">선택된 병사 수: <span id="sliderValue">1</span></div>
+            </div>
+            <button id="maxButton">최대</button>
+            <button id="confirmButton">확인</button>
+        </div>
+    </div>
+
+    <!-- 징병 모달 -->
+    <div id="recruitModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" id="recruitModalClose">&times;</span>
+            <h3>징병</h3>
+            <p>징병할 병사 수를 선택하세요 (1명당 금 10 소모)</p>
+            <div class="slider-container">
+                <input type="range" min="1" max="100" value="1" id="recruitSlider">
+                <div class="slider-value">선택된 병사 수: <span id="recruitSliderValue">1</span></div>
+            </div>
+            <button id="recruitMaxButton">최대</button>
+            <button id="recruitConfirmButton">확인</button>
+        </div>
+    </div>
+
+    <script>
+        // 게임 상태 변수
+        let turn = 1;
+        let actionPoints = 5;
+        let gold = 100;
+        let food = 100;
+        let ownedTerritories = [];
+        let selectedTile = null; // 병사 이동을 위한 선택된 타일
+        let isBattleInProgress = false; // 전투 진행 여부
+        let actionType = ''; // 'move', 'attack', 'occupy' 중 하나
+        let targetTile = null; // 대상 타일
+        let isGameStarted = false; // 게임 시작 여부 (시작 위치 선택 후 true)
+
+        // 적국 리스트
+        const enemyNations = [];
+
+        // 적국 색상 리스트
+        const enemyColors = ['#FF0000', '#00FF00', '#636300', '#FF00FF', '#00FFFF', '#FFA500', '#800080', '#008000', '#000080', '#FFC0CB', '#800000', '#808000', '#008080', '#383838', '#A52A2A', '#8B4513', '#2F4F4F', '#DC143C', '#FF1493', '#1E90FF'];
+
+        // 지도 설정
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const mapWidth = 30;  // 가로 칸 수
+        const mapHeight = 20; // 세로 칸 수
+        const tileSize = 20;  // 타일 크기
+        const mapData = [];
+
+        // 모달 요소
+        const soldierModal = document.getElementById('soldierModal');
+        const modalClose = document.getElementById('modalClose');
+        const soldierSlider = document.getElementById('soldierSlider');
+        const sliderValueDisplay = document.getElementById('sliderValue');
+        const confirmButton = document.getElementById('confirmButton');
+        const modalTitle = document.getElementById('modalTitle');
+        const maxButton = document.getElementById('maxButton');
+
+        // 징병 모달 요소
+        const recruitModal = document.getElementById('recruitModal');
+        const recruitModalClose = document.getElementById('recruitModalClose');
+        const recruitSlider = document.getElementById('recruitSlider');
+        const recruitSliderValue = document.getElementById('recruitSliderValue');
+        const recruitConfirmButton = document.getElementById('recruitConfirmButton');
+        const recruitMaxButton = document.getElementById('recruitMaxButton');
+
+        // 모달 닫기 이벤트
+        modalClose.onclick = function() {
+            soldierModal.style.display = 'none';
+            selectedTile = null;
+            targetTile = null;
+            actionType = '';
+            drawMap();
+        }
+
+        // 슬라이더 값 표시 업데이트
+        soldierSlider.oninput = function() {
+            sliderValueDisplay.innerText = this.value;
+        }
+
+        // '최대' 버튼 클릭 시
+        maxButton.onclick = function() {
+            soldierSlider.value = soldierSlider.max;
+            sliderValueDisplay.innerText = soldierSlider.max;
+        }
+
+        // 창 밖을 클릭하면 모달 닫기
+        window.onclick = function(event) {
+            if (event.target == soldierModal) {
+                soldierModal.style.display = 'none';
+                selectedTile = null;
+                targetTile = null;
+                actionType = '';
+                drawMap();
+            }
+            if (event.target == recruitModal) {
+                recruitModal.style.display = 'none';
+                selectedTile = null;
+                drawMap();
+            }
+        }
+
+        // 징병 모달 이벤트 처리
+        recruitModalClose.onclick = function() {
+            recruitModal.style.display = 'none';
+            selectedTile = null;
+            drawMap();
+        }
+
+        recruitSlider.oninput = function() {
+            recruitSliderValue.innerText = this.value;
+        }
+
+        recruitMaxButton.onclick = function() {
+            const maxAffordable = Math.floor(gold / 10);
+            recruitSlider.value = maxAffordable;
+            recruitSliderValue.innerText = maxAffordable;
+        }
+
+        recruitConfirmButton.onclick = function() {
+            const soldiersToRecruit = parseInt(recruitSlider.value);
+            const cost = soldiersToRecruit * 10;
+            if (gold >= cost) {
+                gold -= cost;
+                selectedTile.soldiers += soldiersToRecruit;
+                actionPoints--;
+                recruitModal.style.display = 'none';
+                logMessage(`병사 ${soldiersToRecruit}명을 모집했습니다. (금 ${cost} 소모)`);
+                updateInfo();
+                drawMap();
+            } else {
+                alert('금이 부족합니다.');
+            }
+            selectedTile = null;
+        }
+
+        // 딜레이 함수 추가
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // 지도 초기화
+        function initMap() {
+            // 모든 타일을 막힌 지형으로 초기화
+            for (let y = 0; y < mapHeight; y++) {
+                const row = [];
+                for (let x = 0; x < mapWidth; x++) {
+                    row.push({
+                        x: x,
+                        y: y,
+                        terrain: 1, // 막힌 지형으로 초기화
+                        owner: null,
+                        nation: null, // 적국 또는 플레이어의 국가
+                        soldiers: 0 // 타일에 주둔한 병사 수
+                    });
+                }
+                mapData.push(row);
+            }
+            // 접근 가능한 영역 생성
+            generateAccessibleArea();
+            // 적국 배치
+            placeEnemyNations(20); // 적국 수를 5개로 설정
+            // 플레이어 시작 위치 선택 대기
+            drawMap();
+            alert('맵이 생성되었습니다. 시작 위치를 선택하세요.');
+        }
+
+        // 접근 가능한 영역 생성
+        function generateAccessibleArea() {
+            const totalAccessibleTiles = Math.floor((mapWidth * mapHeight) * 0.7); // 전체 타일의 70%를 접근 가능하게 설정
+            let accessibleTiles = 0;
+
+            while (accessibleTiles < totalAccessibleTiles) {
+                const startX = Math.floor(Math.random() * mapWidth);
+                const startY = Math.floor(Math.random() * mapHeight);
+
+                if (mapData[startY][startX].terrain === 0) continue;
+
+                const stack = [{ x: startX, y: startY }];
+                while (stack.length > 0 && accessibleTiles < totalAccessibleTiles) {
+                    const current = stack.pop();
+                    const tile = mapData[current.y][current.x];
+                    if (tile.terrain === 0) continue;
+
+                    tile.terrain = 0;
+                    accessibleTiles++;
+
+                    const neighbors = shuffleArray(getNeighbors(current.x, current.y));
+                    neighbors.forEach(neighbor => {
+                        const neighborTile = mapData[neighbor.y][neighbor.x];
+                        if (neighborTile.terrain === 1) {
+                            stack.push(neighbor);
+                        }
+                    });
+                }
+            }
+        }
+
+        // 배열 섞기 함수
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        // 주변 타일 가져오기
+        function getNeighbors(x, y) {
+            const neighbors = [];
+            const directions = [
+                [0, -1], [0, 1], [-1, 0], [1, 0]
+            ];
+            directions.forEach(d => {
+                const nx = x + d[0];
+                const ny = y + d[1];
+                if (nx >= 0 && nx < mapWidth && ny >= 0 && ny < mapHeight) {
+                    neighbors.push({ x: nx, y: ny });
+                }
+            });
+            return neighbors;
+        }
+
+        // 적국 초기 영토 배치
+        function placeEnemyNations(count) {
+            for (let i = 0; i < count; i++) {
+                let placed = false;
+                const nationName = 'enemy' + i;
+                const nationColor = enemyColors[i % enemyColors.length];
+                let attempts = 0;
+                while (!placed && attempts < 1000) {
+                    attempts++;
+                    const x = Math.floor(Math.random() * mapWidth);
+                    const y = Math.floor(Math.random() * mapHeight);
+                    const tile = mapData[y][x];
+                    if (tile.terrain === 0 && tile.owner === null) {
+                        tile.owner = 'enemy';
+                        tile.nation = nationName;
+                        tile.color = nationColor;
+                        tile.soldiers = 10; // 초기 병사 수를 10으로 설정
+                        enemyNations.push({
+                            name: nationName,
+                            territories: [tile],
+                            color: nationColor,
+                            gold: 100,
+                            food: 100,
+                            actionPoints: 5
+                        });
+                        placed = true;
+                    }
+                }
+                if (!placed) {
+                    console.warn(`적국 ${nationName}을 배치할 수 없습니다.`);
+                }
+            }
+        }
+
+        // 지도 그리기
+        function drawMap() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let y = 0; y < mapHeight; y++) {
+                for (let x = 0; x < mapWidth; x++) {
+                    const tile = mapData[y][x];
+                    if (tile.terrain === 0) {
+                        if (tile.owner === 'player') {
+                            ctx.fillStyle = '#0000FF';
+                        } else if (tile.owner === 'enemy') {
+                            const nation = enemyNations.find(n => n.name === tile.nation);
+                            ctx.fillStyle = nation.color;
+                        } else {
+                            ctx.fillStyle = '#FFFFFF';
+                        }
+                    } else {
+                        ctx.fillStyle = '#888888';
+                    }
+                    ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+                    ctx.strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+
+                    // 선택된 타일에 테두리 표시
+                    if (selectedTile && tile.x === selectedTile.x && tile.y === selectedTile.y) {
+                        ctx.lineWidth = 3;
+                        ctx.strokeStyle = 'yellow';
+                        ctx.strokeRect(x * tileSize, y * tileSize, tileSize, tileSize);
+                        ctx.lineWidth = 1;
+                        ctx.strokeStyle = 'black';
+                    }
+
+                    // 병사 수 표시
+                    let soldiersToDisplay = tile.soldiers;
+                    if (typeof tile.tempSoldiers !== 'undefined') {
+                        soldiersToDisplay = tile.tempSoldiers;
+                    }
+                    if (soldiersToDisplay > 0) {
+                        ctx.fillStyle = '#FFFFFF';
+                        ctx.font = '10px Arial';
+                        ctx.fillText(soldiersToDisplay, x * tileSize + 2, y * tileSize + 12);
+                    }
+                }
+            }
+        }
+
+        // 타일 클릭 이벤트 처리
+        canvas.addEventListener('click', function(event) {
+            if (isBattleInProgress) {
+                alert('전투가 진행 중입니다. 잠시만 기다려주세요.');
+                return;
+            }
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.floor((event.clientX - rect.left) / tileSize);
+            const y = Math.floor((event.clientY - rect.top) / tileSize);
+            handleTileClick(x, y);
+        });
+
+        // 타일 클릭 시 동작
+        function handleTileClick(x, y) {
+            const tile = mapData[y][x];
+            if (tile.terrain !== 0) {
+                alert('이동할 수 없는 지형입니다.');
+                return;
+            }
+
+            if (!isGameStarted) {
+                // 게임 시작 전: 시작 위치 선택
+                if (tile.owner === null) {
+                    tile.owner = 'player';
+                    tile.nation = 'player';
+                    tile.soldiers = 10;
+                    ownedTerritories.push(tile);
+                    isGameStarted = true;
+                    selectedTile = null;
+                    drawMap();
+                    alert('시작 위치가 선택되었습니다. 게임을 시작합니다.');
+                    document.getElementById('info').style.display = 'block';
+                    document.getElementById('actions').style.display = 'block';
+                    document.getElementById('messages').style.display = 'block';
+                    updateInfo();
+                } else {
+                    alert('이미 점령된 타일입니다. 다른 타일을 선택하세요.');
+                }
+                return;
+            }
+
+            // 게임 진행 중인 경우
+            if (tile.owner === 'player') {
+                if (!selectedTile) {
+                    selectedTile = tile;
+                    // 팝업 제거
+                    drawMap();
+                } else if (selectedTile === tile) {
+                    // 같은 타일을 다시 클릭하면 징병 모달 열기
+                    openRecruitModal();
+                } else {
+                    if (tile.owner === 'player') {
+                        actionType = 'move';
+                        targetTile = tile;
+                        openSoldierModal('병사 이동');
+                    } else if (tile.owner === 'enemy') {
+                        actionType = 'attack';
+                        targetTile = tile;
+                        openSoldierModal('공격');
+                    } else {
+                        actionType = 'occupy';
+                        targetTile = tile;
+                        openSoldierModal('점령');
+                    }
+                }
+            } else {
+                if (selectedTile) {
+                    if (tile.owner === 'enemy') {
+                        actionType = 'attack';
+                        targetTile = tile;
+                        openSoldierModal('공격');
+                    } else if (tile.owner === null) {
+                        actionType = 'occupy';
+                        targetTile = tile;
+                        openSoldierModal('점령');
+                    }
+                } else {
+                    alert('자신의 타일을 먼저 선택하세요.');
+                }
+            }
+        }
+
+        // 징병 모달 열기
+        function openRecruitModal() {
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                selectedTile = null;
+                drawMap();
+                return;
+            }
+            const maxAffordable = Math.floor(gold / 10);
+            if (maxAffordable < 1) {
+                alert('금이 부족하여 징병할 수 없습니다.');
+                selectedTile = null;
+                drawMap();
+                return;
+            }
+            recruitSlider.max = maxAffordable;
+            recruitSlider.value = 1;
+            recruitSliderValue.innerText = '1';
+            recruitModal.style.display = 'block';
+        }
+
+        // 병사 수 선택 모달 열기
+        function openSoldierModal(title) {
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                selectedTile = null;
+                targetTile = null;
+                actionType = '';
+                drawMap();
+                return;
+            }
+            const maxSoldiers = selectedTile.soldiers;
+            if (maxSoldiers <= 0) {
+                alert('병사가 없습니다.');
+                selectedTile = null;
+                targetTile = null;
+                actionType = '';
+                drawMap();
+                return;
+            }
+            if (!isAdjacent(selectedTile, targetTile)) {
+                alert('인접한 타일만 선택할 수 있습니다.');
+                selectedTile = null;
+                targetTile = null;
+                actionType = '';
+                drawMap();
+                return;
+            }
+            modalTitle.innerText = title;
+            soldierSlider.max = maxSoldiers;
+            soldierSlider.value = 1;
+            sliderValueDisplay.innerText = '1';
+            soldierModal.style.display = 'block';
+        }
+
+        // 병사 수 선택 확인 버튼 클릭 시
+        confirmButton.onclick = function() {
+            const soldiersToSend = parseInt(soldierSlider.value);
+            soldierModal.style.display = 'none';
+            if (actionType === 'move') {
+                moveSoldiers(selectedTile, targetTile, soldiersToSend);
+            } else if (actionType === 'attack') {
+                attackTile(selectedTile, targetTile, soldiersToSend);
+            } else if (actionType === 'occupy') {
+                occupyTile(selectedTile, targetTile, soldiersToSend);
+            }
+            selectedTile = null;
+            targetTile = null;
+            actionType = '';
+            drawMap();
+        }
+
+        // 병사 이동
+        function moveSoldiers(fromTile, toTile, soldiersToMove) {
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                return;
+            }
+            actionPoints--;
+            fromTile.soldiers -= soldiersToMove;
+            toTile.soldiers += soldiersToMove;
+            logMessage(`(${fromTile.x}, ${fromTile.y})에서 (${toTile.x}, ${toTile.y})로 병사 ${soldiersToMove}명을 이동했습니다.`);
+            updateInfo();
+            drawMap();
+        }
+
+        // 타일 점령
+        function occupyTile(fromTile, targetTile, soldiersToSend) {
+            if (isBattleInProgress) {
+                alert('전투가 진행 중입니다. 잠시만 기다려주세요.');
+                return;
+            }
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                return;
+            }
+            actionPoints--;
+            fromTile.soldiers -= soldiersToSend;
+
+            isBattleInProgress = true; // 전투 시작
+            startBattleSequence(fromTile, targetTile, soldiersToSend, 0, (battleResult, remainingPlayerSoldiers) => {
+                isBattleInProgress = false; // 전투 종료
+                if (battleResult) {
+                    targetTile.owner = 'player';
+                    targetTile.nation = 'player';
+                    targetTile.soldiers = remainingPlayerSoldiers;
+                    ownedTerritories.push(targetTile);
+                    logMessage(`영토 (${targetTile.x}, ${targetTile.y})를 점령했습니다.`);
+                    updateInfo();
+                    drawMap();
+                    checkVictory();
+                } else {
+                    logMessage('점령에 실패했습니다.');
+                    updateInfo(); // 행동력 업데이트
+                    drawMap();
+                }
+            });
+        }
+
+        // 적 타일 공격
+        function attackTile(fromTile, targetTile, soldiersToSend) {
+            if (isBattleInProgress) {
+                alert('전투가 진행 중입니다. 잠시만 기다려주세요.');
+                return;
+            }
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                return;
+            }
+            actionPoints--;
+            fromTile.soldiers -= soldiersToSend;
+            const enemyNation = enemyNations.find(n => n.name === targetTile.nation);
+
+            isBattleInProgress = true; // 전투 시작
+            startBattleSequence(fromTile, targetTile, soldiersToSend, targetTile.soldiers, (battleResult, remainingPlayerSoldiers, remainingEnemySoldiers) => {
+                isBattleInProgress = false; // 전투 종료
+                if (battleResult) {
+                    targetTile.owner = 'player';
+                    targetTile.nation = 'player';
+                    targetTile.color = null;
+                    targetTile.soldiers = remainingPlayerSoldiers;
+                    ownedTerritories.push(targetTile);
+                    enemyNation.territories = enemyNation.territories.filter(t => t !== targetTile);
+                    logMessage(`적국 ${enemyNation.name}의 영토 (${targetTile.x}, ${targetTile.y})를 점령했습니다!`);
+                    updateInfo();
+                    drawMap();
+                    checkVictory();
+                } else {
+                    targetTile.soldiers = remainingEnemySoldiers;
+                    logMessage('공격에 실패했습니다.');
+                    updateInfo(); // 행동력 업데이트
+                    drawMap();
+                }
+            });
+        }
+
+        // 전투 연출 함수
+        function startBattleSequence(fromTile, targetTile, playerArmy, enemyArmy, callback) {
+            let playerRemaining = playerArmy;
+            let enemyRemaining = enemyArmy;
+
+            const battleInterval = setInterval(() => {
+                if (playerRemaining <= 0 || enemyRemaining <= 0) {
+                    clearInterval(battleInterval);
+                    const battleResult = playerRemaining > 0;
+                    // 전투 종료 후 실제 병사 수로 업데이트
+                    if (fromTile) {
+                        fromTile.soldiers = fromTile.soldiers + playerRemaining - playerArmy;
+                        delete fromTile.tempSoldiers;
+                    }
+                    if (targetTile) {
+                        targetTile.soldiers = enemyRemaining;
+                        delete targetTile.tempSoldiers;
+                    }
+                    callback(battleResult, playerRemaining, enemyRemaining);
+                } else {
+                    const playerDamage = Math.floor(Math.random() * 5) + 1; // 1~5
+                    const enemyDamage = Math.floor(Math.random() * 5) + 1; // 1~5
+
+                    playerRemaining -= enemyDamage;
+                    enemyRemaining -= playerDamage;
+
+                    if (playerRemaining < 0) playerRemaining = 0;
+                    if (enemyRemaining < 0) enemyRemaining = 0;
+
+                    // 전투 진행 상황을 맵에 반영
+                    if (fromTile) {
+                        fromTile.tempSoldiers = playerRemaining;
+                    }
+                    if (targetTile) {
+                        targetTile.tempSoldiers = enemyRemaining;
+                    }
+                    drawMap();
+
+                    logMessage(`전투 진행 중... 아군 병사: ${playerRemaining}, 적 병사: ${enemyRemaining}`);
+                }
+            }, 100); // 전투 진행 딜레이 0.5초
+        }
+
+        // 인접한 타일인지 확인
+        function isAdjacent(tile1, tile2) {
+            const dx = Math.abs(tile1.x - tile2.x);
+            const dy = Math.abs(tile1.y - tile2.y);
+            return (dx + dy) === 1;
+        }
+
+        // 징병 함수
+        function recruitSoldiers() {
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                return;
+            }
+            if (!selectedTile) {
+                alert('병사를 모집할 자신의 타일을 먼저 선택하세요.');
+                return;
+            }
+            openRecruitModal();
+        }
+
+        // 수확 함수 추가
+        function harvestResources() {
+            if (actionPoints <= 0) {
+                alert('행동력이 부족합니다.');
+                return;
+            }
+            const goldEarned = ownedTerritories.length * 5;
+            const foodEarned = ownedTerritories.length * 5;
+            gold += goldEarned;
+            food += foodEarned;
+            actionPoints--;
+            logMessage(`수확을 통해 금 ${goldEarned}, 식량 ${foodEarned}을 얻었습니다.`);
+            updateInfo();
+        }
+
+        // 턴 종료
+        async function endTurn() {
+            if (isBattleInProgress) {
+                alert('전투가 진행 중입니다. 잠시만 기다려주세요.');
+                return;
+            }
+
+            turn++;
+            logMessage('플레이어의 턴입니다.');
+            actionPoints = 5;
+            updateInfo();
+            drawMap();
+
+            // 병사 유지 비용 계산
+            const totalSoldiers = ownedTerritories.reduce((sum, tile) => sum + tile.soldiers, 0);
+            const foodConsumption = totalSoldiers * 1;
+            food -= foodConsumption;
+            logMessage(`병사들이 식량 ${foodConsumption}을 소비했습니다.`);
+
+            if (food < 0) {
+                food = 0;
+                logMessage('식량이 부족하여 병사들이 탈영하였습니다.');
+                ownedTerritories.forEach(tile => {
+                    tile.soldiers = Math.max(0, tile.soldiers - 5);
+                });
+            }
+
+            updateInfo();
+
+            // 각 적국의 턴을 순서대로 진행
+            await enemyActions();
+
+            checkDefeat();
+            logMessage('턴이 종료되었습니다. 현재 턴: ' + turn);
+            drawMap();
+        }
+
+        // 적국의 행동 (적국 리스트를 순회하면서 턴 진행)
+        async function enemyActions() {
+            const deadNations = []; // 멸망한 적국들을 저장할 배열
+
+            for (const nation of enemyNations) {
+                await enemyTurn(nation);
+
+                // 적국이 멸망했는지 확인
+                if (nation.territories.length === 0) {
+                    logMessage(`적국 ${nation.name}이 멸망하였습니다.`);
+                    deadNations.push(nation); // 멸망한 적국을 배열에 추가
+                }
+            }
+
+            // 멸망한 적국들을 enemyNations 배열에서 제거
+            for (const deadNation of deadNations) {
+                const index = enemyNations.indexOf(deadNation);
+                if (index > -1) {
+                    enemyNations.splice(index, 1);
+                }
+            }
+        }
+
+        // 적국의 턴 진행
+        async function enemyTurn(nation) {
+            logMessage(`적국 ${nation.name}의 턴입니다.`);
+            nation.actionPoints = 5;
+
+            // 병사 유지 비용 계산
+            const totalSoldiers = nation.territories.reduce((sum, tile) => sum + tile.soldiers, 0);
+            const foodConsumption = totalSoldiers * 1;
+            nation.food -= foodConsumption;
+
+            if (nation.food < 0) {
+                nation.food = 0;
+                logMessage(`적국 ${nation.name}의 식량이 부족하여 병사들이 탈영하였습니다.`);
+                nation.territories.forEach(tile => {
+                    tile.soldiers = Math.max(0, tile.soldiers - 5);
+                });
+            }
+
+            // AI 행동 로직
+            while (nation.actionPoints > 0) {
+                const action = await decideEnemyAction(nation);
+                if (action) {
+                    nation.actionPoints--;
+                    await delay(100); // 각 행동 사이에 0.5초 딜레이 추가
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // 적의 행동 결정
+        async function decideEnemyAction(nation) { // 함수에 async 추가
+            // 행동 우선순위 재조정
+            // 1. 식량이 부족하면 수확
+            if (nation.food < 20) {
+                enemyHarvest(nation);
+                drawMap(); // 맵 업데이트
+                return true;
+            }
+
+            // 2. 인접한 적 타일에 대응하여 병사 징병
+            const borderTiles = [];
+            nation.territories.forEach(tile => {
+                const neighbors = getNeighbors(tile.x, tile.y);
+                for (let j = 0; j < neighbors.length; j++) {
+                    const neighborCoords = neighbors[j];
+                    const neighbor = mapData[neighborCoords.y][neighborCoords.x];
+                    if (neighbor.terrain !== 0) continue;
+                    if (neighbor.owner === 'player') {
+                        borderTiles.push(tile);
+                        break;
+                    }
+                }
+            });
+
+            if (borderTiles.length > 0 && nation.gold >= 10) {
+                const tile = borderTiles[Math.floor(Math.random() * borderTiles.length)];
+                enemyRecruit(nation, tile);
+                drawMap(); // 맵 업데이트
+                return true;
+            }
+
+            // 3. 공격 가능한 플레이어의 영토가 있으면 공격
+            const attackActions = [];
+            const occupyActions = [];
+
+            for (let i = 0; i < nation.territories.length; i++) {
+                const tile = nation.territories[i];
+                const neighbors = getNeighbors(tile.x, tile.y);
+                for (let j = 0; j < neighbors.length; j++) {
+                    const neighborCoords = neighbors[j];
+                    const neighbor = mapData[neighborCoords.y][neighborCoords.x];
+
+                    if (neighbor.terrain !== 0) continue;
+
+                    if (neighbor.owner === 'player') {
+                        attackActions.push({ fromTile: tile, targetTile: neighbor });
+                    } else if (neighbor.owner === null) {
+                        occupyActions.push({ fromTile: tile, targetTile: neighbor });
+                    }
+                }
+            }
+
+            if (attackActions.length > 0) {
+                // 공격 수행
+                const action = attackActions[Math.floor(Math.random() * attackActions.length)];
+                await enemyAttack(nation, action.fromTile, action.targetTile);
+                drawMap(); // 맵 업데이트
+                return true;
+            }
+
+            // 4. 점령 가능한 중립 영토가 있으면 점령
+            if (occupyActions.length > 0) {
+                const action = occupyActions[Math.floor(Math.random() * occupyActions.length)];
+                await enemyOccupy(nation, action.fromTile, action.targetTile);
+                drawMap(); // 맵 업데이트
+                return true;
+            }
+
+            // 5. 금이 충분하면 병사 징병
+            if (nation.gold >= 10) {
+                const tile = nation.territories[Math.floor(Math.random() * nation.territories.length)];
+                enemyRecruit(nation, tile);
+                drawMap(); // 맵 업데이트
+                return true;
+            }
+
+            // 6. 그 외에는 수확
+            enemyHarvest(nation);
+            drawMap(); // 맵 업데이트
+            return true;
+        }
+
+        // 적의 수확
+        function enemyHarvest(nation) {
+            if (nation.actionPoints <= 0) return;
+            const goldEarned = nation.territories.length * 5;
+            const foodEarned = nation.territories.length * 5;
+            nation.gold += goldEarned;
+            nation.food += foodEarned;
+            logMessage(`적국 ${nation.name}이 수확을 통해 금 ${goldEarned}, 식량 ${foodEarned}을 얻었습니다.`);
+        }
+
+        // 적의 징병
+        function enemyRecruit(nation, tile) {
+            if (nation.actionPoints <= 0) return;
+            const maxAffordable = Math.floor(nation.gold / 10);
+            if (maxAffordable > 0) {
+                const soldiersToRecruit = Math.min(10, maxAffordable);
+                const cost = soldiersToRecruit * 10;
+                nation.gold -= cost;
+                tile.soldiers += soldiersToRecruit;
+                logMessage(`적국 ${nation.name}이 병사 ${soldiersToRecruit}명을 모집했습니다.`);
+            }
+        }
+
+        // 적의 공격
+        async function enemyAttack(nation, fromTile, targetTile) { // 함수에 async 추가
+            if (fromTile.soldiers <= 0) return;
+            const soldiersToSend = fromTile.soldiers;
+            fromTile.soldiers = 0;
+
+            isBattleInProgress = true;
+            await startBattleSequence(fromTile, targetTile, soldiersToSend, targetTile.soldiers, (battleResult, remainingEnemySoldiers, remainingPlayerSoldiers) => {
+                isBattleInProgress = false;
+                if (battleResult) {
+                    targetTile.owner = 'enemy';
+                    targetTile.nation = nation.name;
+                    targetTile.color = nation.color;
+                    targetTile.soldiers = remainingEnemySoldiers;
+                    ownedTerritories = ownedTerritories.filter(t => t !== targetTile);
+                    nation.territories.push(targetTile);
+                    logMessage(`적국 ${nation.name}이 당신의 영토 (${targetTile.x}, ${targetTile.y})를 점령했습니다!`);
+                    checkDefeat();
+                } else {
+                    targetTile.soldiers = remainingPlayerSoldiers;
+                    logMessage(`적국 ${nation.name}의 공격을 방어했습니다!`);
+                }
+                drawMap();
+            });
+        }
+
+        // 적의 점령
+        async function enemyOccupy(nation, fromTile, targetTile) { // 함수에 async 추가
+            if (fromTile.soldiers <= 0) return;
+            const soldiersToSend = fromTile.soldiers;
+            fromTile.soldiers = 0;
+
+            targetTile.owner = 'enemy';
+            targetTile.nation = nation.name;
+            targetTile.color = nation.color;
+            targetTile.soldiers = soldiersToSend;
+            nation.territories.push(targetTile);
+            logMessage(`적국 ${nation.name}이 새로운 영토 (${targetTile.x}, ${targetTile.y})를 점령했습니다.`);
+            drawMap();
+        }
+
+        // 승리 조건 확인
+        function checkVictory() {
+            const totalLand = mapWidth * mapHeight;
+            const occupiedLand = ownedTerritories.length;
+            if (occupiedLand >= totalLand - enemyNations.length) {
+                alert('축하합니다! 모든 영토를 점령하여 승리하였습니다!');
+                resetGame();
+            }
+        }
+
+        // 패배 조건 확인
+        function checkDefeat() {
+            if (ownedTerritories.length === 0) {
+                alert('모든 영토를 잃어 패배하였습니다.');
+                resetGame();
+            }
+        }
+
+        // 게임 재시작
+        function resetGame() {
+            location.reload();
+        }
+
+        // 정보 업데이트
+        function updateInfo() {
+            document.getElementById('turn').innerText = turn;
+            document.getElementById('actionPoints').innerText = actionPoints;
+            document.getElementById('ownedTerritories').innerText = ownedTerritories.length;
+            document.getElementById('gold').innerText = gold;
+            document.getElementById('food').innerText = food;
+        }
+
+        // 메시지 로그
+        function logMessage(message) {
+            const messages = document.getElementById('messages');
+            const newMessage = document.createElement('p');
+            newMessage.innerText = message;
+            messages.appendChild(newMessage);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        // 게임 초기화
+        initMap();
+
+    </script>
+
+</body>
+</html>
